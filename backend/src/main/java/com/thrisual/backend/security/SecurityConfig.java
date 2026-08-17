@@ -58,6 +58,8 @@ public class SecurityConfig {
             "http://127.0.0.1:3000",
             "http://localhost:5173",
             "http://127.0.0.1:5173",
+            "https://*.vercel.app",
+            "https://*.onrender.com",
             "https://*.up.railway.app",
             "https://*.railway.app"
         ));
