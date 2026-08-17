@@ -51,25 +51,27 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
 
-        // Build allowed origins list — always include localhost + Railway frontend URLs
-        List<String> origins = new ArrayList<>(Arrays.asList(
+        List<String> originPatterns = new ArrayList<>(Arrays.asList(
+            "http://localhost:[*]",
+            "http://127.0.0.1:[*]",
             "http://localhost:3000",
             "http://127.0.0.1:3000",
             "http://localhost:5173",
             "http://127.0.0.1:5173",
-            "https://frontend-production-72f7.up.railway.app"
+            "https://*.up.railway.app",
+            "https://*.railway.app"
         ));
-        configuration.addAllowedOriginPattern("https://*.up.railway.app");
-        configuration.addAllowedOriginPattern("https://*.railway.app");
-        // Add Railway frontend URL from env variable (may be comma-separated)
+
         if (frontendUrl != null && !frontendUrl.isBlank()) {
             for (String url : frontendUrl.split(",")) {
                 String trimmed = url.trim();
-                if (!trimmed.isEmpty()) origins.add(trimmed);
+                if (!trimmed.isEmpty()) {
+                    originPatterns.add(trimmed);
+                }
             }
         }
 
-        configuration.setAllowedOrigins(origins);
+        configuration.setAllowedOriginPatterns(originPatterns);
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"));
         configuration.setAllowedHeaders(Arrays.asList("Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With"));
         configuration.setAllowCredentials(true);
