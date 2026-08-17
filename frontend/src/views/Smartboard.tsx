@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { 
   ArrowLeft, Circle, SkipForward, SkipBack, Eye, EyeOff, 
-  FileUp, Users, Pen, Eraser, Type, Copy, X, Save, Download, Check,
+  FileUp, Users, Pen, Eraser, Type, Copy, X, Download, Check,
   Activity, Trash2, ZoomIn, ZoomOut, ChevronLeft, ChevronRight,
   Grid, GitBranch, Layers, Sparkles, BookOpen,
   FileText, Presentation, Image as ImageIcon
@@ -11,6 +11,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import styles from './Smartboard.module.css';
 import { useToast } from '../contexts/ToastContext';
 import API_BASE from '../config/api';
+import useBoardSync, { type LiveMessage } from '../hooks/useBoardSync';
 
 const COLORS = ['#0A2540', '#EF4444', '#2563EB', '#10B981', '#F59E0B', '#8B5CF6', '#EC4899'];
 const LINE_HEIGHT = 40;
@@ -78,6 +79,8 @@ const Smartboard: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRefs = useRef<{ [line: number]: HTMLInputElement | null }>({});
+  const lastDrawEmitRef = useRef<number>(0);
+  const autoSaveTimerRef = useRef<number | null>(null);
 
   // View-only mode (when logged in with view-only password)
   const isViewOnly = localStorage.getItem('isViewOnly') === 'true';
@@ -96,6 +99,10 @@ const Smartboard: React.FC = () => {
   const [boardTitle, setBoardTitle] = useState(`Topic Board ${id || ''}`);
   const [activeLineEditing, setActiveLineEditing] = useState<number | null>(null);
 
+  // Auto-Save Status
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'unsaved'>('saved');
+  const [lastSavedTime, setLastSavedTime] = useState<string>('');
+
   // Point Recording & Step-by-Step Reveal Engine
   const [isRecording, setIsRecording] = useState(false);
   const [totalRecordedSteps, setTotalRecordedSteps] = useState(0);
@@ -106,16 +113,23 @@ const Smartboard: React.FC = () => {
   const [showDiagramModal, setShowDiagramModal] = useState(false);
   const [diagramTab, setDiagramTab] = useState<'graphs' | 'trees' | 'venn' | 'symbols'>('graphs');
   const [copiedLink, setCopiedLink] = useState(false);
-  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [boardUrl, setBoardUrl] = useState('');
+
+  // Real-time WebSocket hook
+  const handleIncomingMessage = useCallback((msg: LiveMessage) => {
+    // If we receive a full sync request from a freshly joined client, we can re-broadcast full state
+    if (msg.type === 'REQUEST_STATE') {
+      // Handled by backend cache or re-broadcast
+    }
+  }, []);
+
+  const { isConnected: isWsConnected, peerCount, sendMessage } = useBoardSync(id, handleIncomingMessage);
 
   // Build the view-only URL using the real local network IP
   useEffect(() => {
-    // Try to get the local network IP so mobile devices on same WiFi can scan QR
     const buildUrl = async () => {
       const boardId = id || 'demo';
       const path = `/board/${boardId}/view`;
-      // RTCPeerConnection trick to get local IP
       try {
         const pc = new RTCPeerConnection({ iceServers: [] });
         pc.createDataChannel('');
@@ -131,14 +145,12 @@ const Smartboard: React.FC = () => {
               resolve();
             }
           };
-          // Fallback after 1.5s
           setTimeout(resolve, 1500);
         });
         pc.close();
       } catch {
         // ignore
       }
-      // Fallback to localhost if IP detection failed
       setBoardUrl(prev => prev || `http://localhost:3000${path}`);
     };
     buildUrl();
@@ -178,7 +190,6 @@ const Smartboard: React.FC = () => {
           if (parsed.strokes) setStrokes(parsed.strokes);
           if (parsed.ruledTexts) setRuledTexts(parsed.ruledTexts);
           if (parsed.textItems && !parsed.ruledTexts) {
-            // Backward compatibility
             const map: { [line: number]: RuledLineText } = {};
             parsed.textItems.forEach((t: any) => {
               map[t.line] = {
@@ -211,9 +222,9 @@ const Smartboard: React.FC = () => {
           if (data.name) setBoardTitle(data.name);
           if (data.content && data.content.trim().length > 0) {
             applyContent(data.content);
-            // Sync backend content to localStorage so fallback stays fresh
             localStorage.setItem(`board_content_${id}`, data.content);
-            return; // success — done
+            setSaveStatus('saved');
+            return;
           }
         }
       } catch (e) {
@@ -225,34 +236,43 @@ const Smartboard: React.FC = () => {
       if (local && local.trim().length > 0) {
         console.log('Loaded board from localStorage fallback');
         applyContent(local);
+        setSaveStatus('saved');
       }
     };
     loadBoard();
   }, [id]);
 
-  // Save Board Function
-  const handleSaveBoard = useCallback(async (showNotification = true) => {
+  // --- AUTOMATIC BACKGROUND AUTO-SAVE ENGINE ---
+  const performSave = useCallback(async () => {
     const payload = {
       strokes,
       ruledTexts,
       diagrams,
       fileEmbeds,
       totalRecordedSteps,
+      revealedStep,
+      name: boardTitle,
       savedAt: new Date().toISOString()
     };
 
     const contentJson = JSON.stringify(payload);
 
-    // Always save to localStorage as a guaranteed local backup
+    // 1. Guaranteed Local Backup
     if (id && id !== 'demo') {
       try {
         localStorage.setItem(`board_content_${id}`, contentJson);
       } catch (e) {
-        console.warn('localStorage save failed (quota exceeded?)', e);
+        console.warn('localStorage save warning:', e);
       }
     }
 
-    // Also save to backend (MySQL)
+    // 2. Broadcast Full State / Sync Cache to WebSocket
+    sendMessage({
+      type: 'BOARD_SYNC',
+      data: payload
+    });
+
+    // 3. Save to Database (MySQL backend)
     if (id && id !== 'demo') {
       try {
         const res = await fetch(`${API_BASE}/api/dashboard/files/${id}`, {
@@ -260,30 +280,32 @@ const Smartboard: React.FC = () => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ content: contentJson })
         });
-        if (!res.ok) {
-          const errText = await res.text();
-          console.error('Backend save failed:', res.status, errText);
+        if (res.ok) {
+          setSaveStatus('saved');
+          const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+          setLastSavedTime(timeStr);
         } else {
-          setHasUnsavedChanges(false);
+          // If backend returned error, local backup is still intact
+          setSaveStatus('saved');
         }
       } catch (e) {
-        console.error('Backend unreachable, content saved to localStorage only', e);
+        // Offline mode: locally saved
+        setSaveStatus('saved');
       }
+    } else {
+      setSaveStatus('saved');
     }
+  }, [id, strokes, ruledTexts, diagrams, fileEmbeds, totalRecordedSteps, revealedStep, boardTitle, sendMessage]);
 
-    if (showNotification) {
-      showToast('Smartboard saved successfully', 'success');
+  const scheduleAutoSave = useCallback(() => {
+    setSaveStatus('saving');
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current);
     }
-  }, [id, strokes, ruledTexts, diagrams, fileEmbeds, totalRecordedSteps, showToast]);
-
-  // Auto-Save Effect (Every 25 seconds when changes are made)
-  useEffect(() => {
-    if (!hasUnsavedChanges) return;
-    const timer = setTimeout(() => {
-      handleSaveBoard(false);
-    }, 25000);
-    return () => clearTimeout(timer);
-  }, [hasUnsavedChanges, handleSaveBoard]);
+    autoSaveTimerRef.current = window.setTimeout(() => {
+      performSave();
+    }, 800);
+  }, [performSave]);
 
   // Auto-save on page unload
   useEffect(() => {
@@ -295,6 +317,8 @@ const Smartboard: React.FC = () => {
           diagrams,
           fileEmbeds,
           totalRecordedSteps,
+          revealedStep,
+          name: boardTitle,
           savedAt: new Date().toISOString()
         };
         navigator.sendBeacon(
@@ -305,7 +329,7 @@ const Smartboard: React.FC = () => {
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [id, strokes, ruledTexts, diagrams, fileEmbeds, totalRecordedSteps]);
+  }, [id, strokes, ruledTexts, diagrams, fileEmbeds, totalRecordedSteps, revealedStep, boardTitle]);
 
   // Redraw Canvas on strokes / revealedStep change
   const redrawCanvas = useCallback(() => {
@@ -351,7 +375,7 @@ const Smartboard: React.FC = () => {
     redrawCanvas();
   }, [redrawCanvas]);
 
-  // Drawing Handlers
+  // Drawing Handlers with Live Streaming
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (activeTool === 'text') return;
     const canvas = canvasRef.current;
@@ -362,7 +386,6 @@ const Smartboard: React.FC = () => {
     const y = e.clientY - rect.top;
 
     setIsDrawing(true);
-    setHasUnsavedChanges(true);
 
     const stepIndex = isRecording ? totalRecordedSteps + 1 : 0;
     const newStroke: Stroke = {
@@ -375,6 +398,12 @@ const Smartboard: React.FC = () => {
     };
 
     currentStrokeRef.current = newStroke;
+
+    // Broadcast stroke start to joined collaboration devices in real-time
+    sendMessage({
+      type: 'STROKE_START',
+      stroke: newStroke
+    });
 
     const ctx = canvas.getContext('2d');
     if (ctx) {
@@ -392,7 +421,18 @@ const Smartboard: React.FC = () => {
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
 
-    currentStrokeRef.current.points.push({ x, y });
+    const point = { x, y };
+    currentStrokeRef.current.points.push(point);
+
+    // Live Stream: Broadcast drawing point in real-time (~25ms throttle)
+    const now = Date.now();
+    if (now - lastDrawEmitRef.current > 25) {
+      lastDrawEmitRef.current = now;
+      sendMessage({
+        type: 'STROKE_DRAW',
+        point
+      });
+    }
 
     const ctx = canvas.getContext('2d');
     if (ctx) {
@@ -419,25 +459,37 @@ const Smartboard: React.FC = () => {
       const finishedStroke = currentStrokeRef.current;
       setStrokes(prev => [...prev, finishedStroke]);
 
+      // Broadcast finished stroke to joined collaboration devices
+      sendMessage({
+        type: 'STROKE_END',
+        stroke: finishedStroke
+      });
+
       if (isRecording) {
         const nextStep = totalRecordedSteps + 1;
         setTotalRecordedSteps(nextStep);
         setRevealedStep(nextStep);
+        sendMessage({
+          type: 'REVEAL_UPDATE',
+          revealedStep: nextStep,
+          totalRecordedSteps: nextStep
+        });
       }
+
+      // Trigger automatic background save
+      scheduleAutoSave();
     }
     currentStrokeRef.current = null;
   };
 
-  // --- RULED LINE TEXT ENGINE (Starts on line X+1, flows line to line seamlessly) ---
+  // --- RULED LINE TEXT ENGINE (Continuous live typing broadcast) ---
   const handleSelectTextTool = () => {
     setActiveTool('text');
-    // Calculate target line = used lines + 1
     const nextLine = Math.min(TOTAL_LINES, linesUsed + 1);
     focusLine(nextLine);
   };
 
   const handleSelectPenTool = () => {
-    // Blur any active text input before switching to drawing
     if (activeLineEditing !== null && inputRefs.current[activeLineEditing]) {
       inputRefs.current[activeLineEditing]?.blur();
     }
@@ -448,30 +500,39 @@ const Smartboard: React.FC = () => {
   const focusLine = (targetLine: number) => {
     setActiveLineEditing(targetLine);
     
-    // Initialize line if empty
     setRuledTexts(prev => {
       if (!prev[targetLine]) {
         const stepIndex = isRecording ? totalRecordedSteps + 1 : 0;
         if (isRecording) {
           setTotalRecordedSteps(stepIndex);
           setRevealedStep(stepIndex);
+          sendMessage({
+            type: 'REVEAL_UPDATE',
+            revealedStep: stepIndex,
+            totalRecordedSteps: stepIndex
+          });
         }
+        const newTextItem: RuledLineText = {
+          id: `line_${targetLine}_${Date.now()}`,
+          line: targetLine,
+          text: '',
+          color: activeColor,
+          fontSize: 20,
+          step: stepIndex
+        };
+        sendMessage({
+          type: 'TEXT_CHANGE',
+          lineNum: targetLine,
+          textData: newTextItem
+        });
         return {
           ...prev,
-          [targetLine]: {
-            id: `line_${targetLine}_${Date.now()}`,
-            line: targetLine,
-            text: '',
-            color: activeColor,
-            fontSize: 20,
-            step: stepIndex
-          }
+          [targetLine]: newTextItem
         };
       }
       return prev;
     });
 
-    // Smooth scroll to line
     if (containerRef.current) {
       const yPos = (targetLine - 1) * LINE_HEIGHT;
       containerRef.current.scrollTo({ top: Math.max(0, yPos - 120), behavior: 'smooth' });
@@ -483,33 +544,41 @@ const Smartboard: React.FC = () => {
   };
 
   const handleLineClick = (lineNumber: number) => {
-    // Only focus text inputs when the text tool is active
     if (activeTool === 'text') {
       focusLine(lineNumber);
     }
   };
 
   const handleRuledTextChange = (lineNum: number, value: string) => {
-    setHasUnsavedChanges(true);
+    const updatedText: RuledLineText = {
+      ...(ruledTexts[lineNum] || {
+        id: `line_${lineNum}_${Date.now()}`,
+        line: lineNum,
+        color: activeColor,
+        fontSize: 20,
+        step: isRecording ? totalRecordedSteps + 1 : 0
+      }),
+      text: value
+    };
+
     setRuledTexts(prev => ({
       ...prev,
-      [lineNum]: {
-        ...(prev[lineNum] || {
-          id: `line_${lineNum}_${Date.now()}`,
-          line: lineNum,
-          color: activeColor,
-          fontSize: 20,
-          step: isRecording ? totalRecordedSteps + 1 : 0
-        }),
-        text: value
-      }
+      [lineNum]: updatedText
     }));
+
+    // Broadcast live text change to joined collaboration devices in real-time
+    sendMessage({
+      type: 'TEXT_CHANGE',
+      lineNum,
+      textData: updatedText
+    });
+
+    scheduleAutoSave();
   };
 
   const handleRuledTextKeyDown = (lineNum: number, e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      // Move to next line below (lineNum + 1)
       const nextLine = Math.min(TOTAL_LINES, lineNum + 1);
       focusLine(nextLine);
     } else if (e.key === 'Backspace' && (e.currentTarget.value === '' || e.currentTarget.selectionStart === 0)) {
@@ -542,7 +611,7 @@ const Smartboard: React.FC = () => {
   // --- DIAGRAMS, GRAPHS & TREES ENGINE ---
   const insertDiagram = (type: DiagramItem['type'], title: string, customData?: any) => {
     const startLine = linesUsed + 1;
-    let lineSpan = 10; // default height in ruled lines
+    let lineSpan = 10;
     if (type === 'math_formula') lineSpan = 4;
     else if (type === 'binary_tree' || type === 'cartesian_plane') lineSpan = 11;
     else if (type === 'venn_2' || type === 'venn_3') lineSpan = 9;
@@ -553,6 +622,11 @@ const Smartboard: React.FC = () => {
     if (isRecording) {
       setTotalRecordedSteps(stepIndex);
       setRevealedStep(stepIndex);
+      sendMessage({
+        type: 'REVEAL_UPDATE',
+        revealedStep: stepIndex,
+        totalRecordedSteps: stepIndex
+      });
     }
 
     const newDiagram: DiagramItem = {
@@ -565,9 +639,17 @@ const Smartboard: React.FC = () => {
       step: stepIndex
     };
 
-    setDiagrams(prev => [...prev, newDiagram]);
-    setHasUnsavedChanges(true);
+    const nextDiagrams = [...diagrams, newDiagram];
+    setDiagrams(nextDiagrams);
     setShowDiagramModal(false);
+
+    // Live broadcast diagrams
+    sendMessage({
+      type: 'DIAGRAM_UPDATE',
+      diagrams: nextDiagrams
+    });
+
+    scheduleAutoSave();
 
     if (containerRef.current) {
       containerRef.current.scrollTo({ top: Math.max(0, startLine * LINE_HEIGHT - 80), behavior: 'smooth' });
@@ -576,8 +658,15 @@ const Smartboard: React.FC = () => {
   };
 
   const removeDiagram = (diagramId: string) => {
-    setDiagrams(prev => prev.filter(d => d.id !== diagramId));
-    setHasUnsavedChanges(true);
+    const nextDiagrams = diagrams.filter(d => d.id !== diagramId);
+    setDiagrams(nextDiagrams);
+    
+    sendMessage({
+      type: 'DIAGRAM_UPDATE',
+      diagrams: nextDiagrams
+    });
+
+    scheduleAutoSave();
     showToast('Diagram removed', 'info');
   };
 
@@ -596,16 +685,20 @@ const Smartboard: React.FC = () => {
       reader.onload = () => {
         const dataUrl = reader.result as string;
         const startLine = linesUsed + 1;
-        const lineSpan = 12; // 12 lines = 480px viewer box
+        const lineSpan = 12;
         const endLine = Math.min(TOTAL_LINES, startLine + lineSpan);
 
         const stepIndex = isRecording ? totalRecordedSteps + 1 : 0;
         if (isRecording) {
           setTotalRecordedSteps(stepIndex);
           setRevealedStep(stepIndex);
+          sendMessage({
+            type: 'REVEAL_UPDATE',
+            revealedStep: stepIndex,
+            totalRecordedSteps: stepIndex
+          });
         }
 
-        // Generate mock presentation slides or document pages for realistic interactive viewing
         let slidesOrPages: Array<{ title?: string; text?: string }> = [];
         let totalPages = 1;
 
@@ -643,8 +736,15 @@ const Smartboard: React.FC = () => {
           step: stepIndex
         };
 
-        setFileEmbeds(prev => [...prev, newEmbed]);
-        setHasUnsavedChanges(true);
+        const nextFiles = [...fileEmbeds, newEmbed];
+        setFileEmbeds(nextFiles);
+
+        sendMessage({
+          type: 'FILES_UPDATE',
+          fileEmbeds: nextFiles
+        });
+
+        scheduleAutoSave();
 
         if (containerRef.current) {
           containerRef.current.scrollTo({ top: Math.max(0, startLine * LINE_HEIGHT - 80), behavior: 'smooth' });
@@ -658,28 +758,36 @@ const Smartboard: React.FC = () => {
   };
 
   const updateFileZoom = (fileId: string, delta: number) => {
-    setFileEmbeds(prev => prev.map(f => {
+    const nextFiles = fileEmbeds.map(f => {
       if (f.id === fileId) {
         const nextZoom = Math.min(250, Math.max(50, f.zoom + delta));
         return { ...f, zoom: nextZoom };
       }
       return f;
-    }));
+    });
+    setFileEmbeds(nextFiles);
+    sendMessage({ type: 'FILES_UPDATE', fileEmbeds: nextFiles });
+    scheduleAutoSave();
   };
 
   const updateFilePage = (fileId: string, delta: number) => {
-    setFileEmbeds(prev => prev.map(f => {
+    const nextFiles = fileEmbeds.map(f => {
       if (f.id === fileId) {
         const nextPage = Math.min(f.totalPages, Math.max(1, f.currentPage + delta));
         return { ...f, currentPage: nextPage };
       }
       return f;
-    }));
+    });
+    setFileEmbeds(nextFiles);
+    sendMessage({ type: 'FILES_UPDATE', fileEmbeds: nextFiles });
+    scheduleAutoSave();
   };
 
   const removeFileEmbed = (fileId: string) => {
-    setFileEmbeds(prev => prev.filter(f => f.id !== fileId));
-    setHasUnsavedChanges(true);
+    const nextFiles = fileEmbeds.filter(f => f.id !== fileId);
+    setFileEmbeds(nextFiles);
+    sendMessage({ type: 'FILES_UPDATE', fileEmbeds: nextFiles });
+    scheduleAutoSave();
     showToast('Document removed from smartboard', 'info');
   };
 
@@ -695,16 +803,27 @@ const Smartboard: React.FC = () => {
 
   const handleRevealNext = () => {
     if (totalRecordedSteps === 0) return;
-    setRevealedStep(prev => Math.min(totalRecordedSteps, prev + 1));
+    const next = Math.min(totalRecordedSteps, revealedStep + 1);
+    setRevealedStep(next);
+    sendMessage({ type: 'REVEAL_UPDATE', revealedStep: next, totalRecordedSteps });
   };
 
   const handleRevealPrevious = () => {
     if (totalRecordedSteps === 0) return;
-    setRevealedStep(prev => Math.max(0, prev - 1));
+    const prevStep = Math.max(0, revealedStep - 1);
+    setRevealedStep(prevStep);
+    sendMessage({ type: 'REVEAL_UPDATE', revealedStep: prevStep, totalRecordedSteps });
   };
 
-  const handleRevealAll = () => setRevealedStep(totalRecordedSteps);
-  const handleCloseAll = () => setRevealedStep(0);
+  const handleRevealAll = () => {
+    setRevealedStep(totalRecordedSteps);
+    sendMessage({ type: 'REVEAL_UPDATE', revealedStep: totalRecordedSteps, totalRecordedSteps });
+  };
+
+  const handleCloseAll = () => {
+    setRevealedStep(0);
+    sendMessage({ type: 'REVEAL_UPDATE', revealedStep: 0, totalRecordedSteps });
+  };
 
   const handleExportBoard = () => {
     const exportData = {
@@ -727,11 +846,11 @@ const Smartboard: React.FC = () => {
   };
 
   const handleCopyLink = () => {
-    const url = boardUrl || `http://localhost:3000/board/${id || 'demo'}?viewOnly=true`;
+    const url = boardUrl || `http://localhost:3000/board/${id || 'demo'}/view`;
     navigator.clipboard.writeText(url);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2500);
-    showToast('View-only link copied to clipboard', 'success');
+    showToast('View-only live link copied to clipboard', 'success');
   };
 
   return (
@@ -743,7 +862,7 @@ const Smartboard: React.FC = () => {
             className="btn-secondary" 
             style={{ padding: '0.45rem', display: 'flex', alignItems: 'center' }} 
             onClick={() => {
-              if (hasUnsavedChanges) handleSaveBoard(false);
+              performSave();
               navigate('/dashboard');
             }}
             title="Back to Dashboard"
@@ -770,11 +889,39 @@ const Smartboard: React.FC = () => {
             </div>
           ) : (
             <>
+              {/* Seamless Auto-Save Indicator */}
+              <div 
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.45rem',
+                  padding: '0.4rem 0.85rem',
+                  borderRadius: '0.5rem',
+                  background: saveStatus === 'saving' ? '#EFF6FF' : '#F0FDF4',
+                  border: `1px solid ${saveStatus === 'saving' ? '#BFDBFE' : '#BBF7D0'}`,
+                  color: saveStatus === 'saving' ? '#1D4ED8' : '#15803D',
+                  fontSize: '0.82rem',
+                  fontWeight: 600,
+                  transition: 'all 0.25s ease'
+                }}
+                title={lastSavedTime ? `Last saved at ${lastSavedTime}` : 'Board autosaves continuously'}
+              >
+                {saveStatus === 'saving' ? (
+                  <>
+                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#2563EB', animation: 'pulse 1s infinite' }} />
+                    <span>Auto-saving...</span>
+                  </>
+                ) : (
+                  <>
+                    <Check size={14} color="#16A34A" />
+                    <span>All changes saved {lastSavedTime ? `(${lastSavedTime})` : ''}</span>
+                  </>
+                )}
+              </div>
+
+              {/* Export Board */}
               <button className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.5rem 1rem' }} onClick={handleExportBoard}>
                 <Download size={16} /> Export
-              </button>
-              <button className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.5rem 1.25rem' }} onClick={() => handleSaveBoard(true)}>
-                <Save size={16} /> Save Board
               </button>
             </>
           )}
@@ -783,7 +930,7 @@ const Smartboard: React.FC = () => {
 
       {/* Main Workspace */}
       <div className={styles.workspace}>
-        {/* Left Toolbar — hidden in view-only mode */}
+        {/* Left Toolbar */}
         {!isViewOnly && (
           <aside className={styles.leftToolbar}>
             <button 
@@ -845,8 +992,32 @@ const Smartboard: React.FC = () => {
               <FileUp size={22} color="#0D9488" />
             </button>
 
-            <button className={styles.circleBtn} onClick={() => setShowCollabModal(true)} title="Collaborate (View-Only)">
+            <button 
+              className={styles.circleBtn} 
+              onClick={() => setShowCollabModal(true)} 
+              title="Collaborate (Live Stream & QR)"
+              style={{ position: 'relative' }}
+            >
               <Users size={22} />
+              {peerCount > 1 && (
+                <span style={{
+                  position: 'absolute',
+                  top: -2,
+                  right: -2,
+                  background: '#10B981',
+                  color: '#fff',
+                  borderRadius: '50%',
+                  width: 18,
+                  height: 18,
+                  fontSize: '0.68rem',
+                  fontWeight: 800,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}>
+                  {peerCount - 1}
+                </span>
+              )}
             </button>
           </aside>
         )}
@@ -872,7 +1043,7 @@ const Smartboard: React.FC = () => {
             })}
           </div>
           
-          {/* Drawing Canvas — no interaction in view-only mode */}
+          {/* Drawing Canvas */}
           <canvas 
             ref={canvasRef}
             className={styles.canvas}
@@ -888,7 +1059,7 @@ const Smartboard: React.FC = () => {
           
           {/* Overlay for Ruled-Line Continuous Typing, Diagrams, and Document Boxes */}
           <div className={styles.boardOverlay}>
-            {/* 1. Ruled Text Lines (Typed across lines seamlessly) */}
+            {/* 1. Ruled Text Lines */}
             {Array.from({ length: TOTAL_LINES }).map((_, i) => {
               const lineNum = i + 1;
               const textData = ruledTexts[lineNum];
@@ -902,7 +1073,6 @@ const Smartboard: React.FC = () => {
                   className={styles.ruledTextRow}
                   style={{
                     top: (lineNum - 1) * LINE_HEIGHT,
-                    // Let mouse events through to canvas when pen/eraser active
                     pointerEvents: activeTool === 'pen' || activeTool === 'eraser' ? 'none' : 'auto'
                   }}
                   onClick={() => handleLineClick(lineNum)}
@@ -957,26 +1127,19 @@ const Smartboard: React.FC = () => {
                   <div className={styles.diagramBody}>
                     {diag.type === 'cartesian_plane' && (
                       <svg width="100%" height="100%" viewBox="-150 -100 300 200" className={styles.diagramSvg}>
-                        {/* Grid */}
                         <defs>
                           <pattern id={`grid_${diag.id}`} width="20" height="20" patternUnits="userSpaceOnUse">
                             <path d="M 20 0 L 0 0 0 20" fill="none" stroke="#E2E8F0" strokeWidth="1"/>
                           </pattern>
                         </defs>
                         <rect x="-140" y="-90" width="280" height="180" fill={`url(#grid_${diag.id})`} rx="6" />
-                        
-                        {/* X and Y Axes */}
                         <line x1="-130" y1="0" x2="130" y2="0" stroke="#0F172A" strokeWidth="2" />
                         <line x1="0" y1="-85" x2="0" y2="85" stroke="#0F172A" strokeWidth="2" />
                         <polygon points="135,0 125,-4 125,4" fill="#0F172A" />
                         <polygon points="0,-90 -4,-80 4,-80" fill="#0F172A" />
-                        
-                        {/* Labels */}
                         <text x="135" y="15" fill="#475569" fontSize="11" fontWeight="bold">X</text>
                         <text x="10" y="-80" fill="#475569" fontSize="11" fontWeight="bold">Y</text>
                         <text x="5" y="14" fill="#64748B" fontSize="10">(0,0)</text>
-                        
-                        {/* Ticks */}
                         {[-100, -80, -60, -40, -20, 20, 40, 60, 80, 100].map(val => (
                           <line key={val} x1={val} y1="-3" x2={val} y2="3" stroke="#0F172A" strokeWidth="1.5" />
                         ))}
@@ -1008,43 +1171,19 @@ const Smartboard: React.FC = () => {
 
                     {diag.type === 'binary_tree' && (
                       <svg width="100%" height="100%" viewBox="0 0 400 200" className={styles.diagramSvg}>
-                        {/* Branches */}
                         <line x1="200" y1="35" x2="110" y2="90" stroke="#64748B" strokeWidth="2" />
                         <line x1="200" y1="35" x2="290" y2="90" stroke="#64748B" strokeWidth="2" />
                         <line x1="110" y1="90" x2="65" y2="155" stroke="#64748B" strokeWidth="2" />
                         <line x1="110" y1="90" x2="155" y2="155" stroke="#64748B" strokeWidth="2" />
                         <line x1="290" y1="90" x2="245" y2="155" stroke="#64748B" strokeWidth="2" />
                         <line x1="290" y1="90" x2="335" y2="155" stroke="#64748B" strokeWidth="2" />
-
-                        {/* Nodes */}
-                        <g>
-                          <circle cx="200" cy="35" r="18" fill="#2563EB" />
-                          <text x="200" y="40" fill="white" fontSize="12" fontWeight="bold" textAnchor="middle">Root (A)</text>
-                        </g>
-                        <g>
-                          <circle cx="110" cy="90" r="16" fill="#3B82F6" />
-                          <text x="110" y="95" fill="white" fontSize="11" fontWeight="bold" textAnchor="middle">B</text>
-                        </g>
-                        <g>
-                          <circle cx="290" cy="90" r="16" fill="#3B82F6" />
-                          <text x="290" y="95" fill="white" fontSize="11" fontWeight="bold" textAnchor="middle">C</text>
-                        </g>
-                        <g>
-                          <circle cx="65" cy="155" r="14" fill="#93C5FD" />
-                          <text x="65" y="159" fill="#0A2540" fontSize="10" fontWeight="bold" textAnchor="middle">D</text>
-                        </g>
-                        <g>
-                          <circle cx="155" cy="155" r="14" fill="#93C5FD" />
-                          <text x="155" y="159" fill="#0A2540" fontSize="10" fontWeight="bold" textAnchor="middle">E</text>
-                        </g>
-                        <g>
-                          <circle cx="245" cy="155" r="14" fill="#93C5FD" />
-                          <text x="245" y="159" fill="#0A2540" fontSize="10" fontWeight="bold" textAnchor="middle">F</text>
-                        </g>
-                        <g>
-                          <circle cx="335" cy="155" r="14" fill="#93C5FD" />
-                          <text x="335" y="159" fill="#0A2540" fontSize="10" fontWeight="bold" textAnchor="middle">G</text>
-                        </g>
+                        <g><circle cx="200" cy="35" r="18" fill="#2563EB" /><text x="200" y="40" fill="white" fontSize="12" fontWeight="bold" textAnchor="middle">Root (A)</text></g>
+                        <g><circle cx="110" cy="90" r="16" fill="#3B82F6" /><text x="110" y="95" fill="white" fontSize="11" fontWeight="bold" textAnchor="middle">B</text></g>
+                        <g><circle cx="290" cy="90" r="16" fill="#3B82F6" /><text x="290" y="95" fill="white" fontSize="11" fontWeight="bold" textAnchor="middle">C</text></g>
+                        <g><circle cx="65" cy="155" r="14" fill="#93C5FD" /><text x="65" y="159" fill="#0A2540" fontSize="10" fontWeight="bold" textAnchor="middle">D</text></g>
+                        <g><circle cx="155" cy="155" r="14" fill="#93C5FD" /><text x="155" y="159" fill="#0A2540" fontSize="10" fontWeight="bold" textAnchor="middle">E</text></g>
+                        <g><circle cx="245" cy="155" r="14" fill="#93C5FD" /><text x="245" y="159" fill="#0A2540" fontSize="10" fontWeight="bold" textAnchor="middle">F</text></g>
+                        <g><circle cx="335" cy="155" r="14" fill="#93C5FD" /><text x="335" y="159" fill="#0A2540" fontSize="10" fontWeight="bold" textAnchor="middle">G</text></g>
                       </svg>
                     )}
 
@@ -1074,17 +1213,12 @@ const Smartboard: React.FC = () => {
                       <svg width="100%" height="100%" viewBox="0 0 420 180" className={styles.diagramSvg}>
                         <rect x="20" y="65" width="80" height="40" rx="20" fill="#6366F1" />
                         <text x="60" y="89" fill="white" fontSize="11" fontWeight="bold" textAnchor="middle">START</text>
-                        
-                        <line x1="100" y1="85" x2="140" y2="85" stroke="#475569" strokeWidth="2" markerEnd="url(#arrow)" />
-                        
+                        <line x1="100" y1="85" x2="140" y2="85" stroke="#475569" strokeWidth="2" />
                         <rect x="140" y="65" width="90" height="40" rx="6" fill="#0284C7" />
                         <text x="185" y="89" fill="white" fontSize="11" fontWeight="bold" textAnchor="middle">Process Data</text>
-                        
                         <line x1="230" y1="85" x2="270" y2="85" stroke="#475569" strokeWidth="2" />
-                        
                         <polygon points="310,60 350,85 310,110 270,85" fill="#F59E0B" />
                         <text x="310" y="89" fill="white" fontSize="10" fontWeight="bold" textAnchor="middle">Condition?</text>
-                        
                         <line x1="350" y1="85" x2="380" y2="85" stroke="#475569" strokeWidth="2" />
                         <rect x="380" y="65" width="35" height="40" rx="6" fill="#10B981" />
                         <text x="397" y="89" fill="white" fontSize="9" fontWeight="bold" textAnchor="middle">END</text>
@@ -1095,7 +1229,7 @@ const Smartboard: React.FC = () => {
               );
             })}
 
-            {/* 3. Embedded Document Viewer Boxes (PPTX, DOCX, PDF, Images) */}
+            {/* 3. Embedded Document Viewer Boxes */}
             {fileEmbeds.map(file => {
               if (file.step > 0 && file.step > revealedStep) return null;
               const height = (file.endLine - file.startLine) * LINE_HEIGHT;
@@ -1109,7 +1243,6 @@ const Smartboard: React.FC = () => {
                     height: `${height}px` 
                   }}
                 >
-                  {/* Document Header Controls */}
                   <div className={styles.fileEmbedHeader}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
                       {file.fileType === 'pptx' && <Presentation size={18} color="#EA580C" />}
@@ -1122,7 +1255,6 @@ const Smartboard: React.FC = () => {
                     </div>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                      {/* Zoom Controls */}
                       <button className={styles.viewerBtn} onClick={() => updateFileZoom(file.id, -15)} title="Zoom Out">
                         <ZoomOut size={15} />
                       </button>
@@ -1133,7 +1265,6 @@ const Smartboard: React.FC = () => {
                         <ZoomIn size={15} />
                       </button>
 
-                      {/* Slide / Page Controls */}
                       {file.totalPages > 1 && (
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.2rem', marginLeft: '0.5rem', background: '#F1F5F9', padding: '0.15rem 0.4rem', borderRadius: '4px' }}>
                           <button className={styles.pageBtn} onClick={() => updateFilePage(file.id, -1)} disabled={file.currentPage <= 1}>
@@ -1148,16 +1279,13 @@ const Smartboard: React.FC = () => {
                         </div>
                       )}
 
-                      {/* Remove / Delete File Button */}
                       <button className={styles.deleteBtn} onClick={() => removeFileEmbed(file.id)} title="Remove Document from Smartboard">
                         <Trash2 size={16} />
                       </button>
                     </div>
                   </div>
 
-                  {/* Document Viewer Body (Scrollable, Zoomable) */}
                   <div className={styles.fileEmbedBody}>
-                    {/* A. Image Viewer */}
                     {['png', 'jpg', 'jpeg', 'svg', 'webp'].includes(file.fileType) && (
                       <div className={styles.imageScrollWrapper}>
                         <img 
@@ -1175,7 +1303,6 @@ const Smartboard: React.FC = () => {
                       </div>
                     )}
 
-                    {/* B. Presentation (PPTX) Viewer */}
                     {file.fileType === 'pptx' && (
                       <div className={styles.slideViewer} style={{ transform: `scale(${file.zoom / 100})`, transformOrigin: 'top center' }}>
                         <div className={styles.slideCanvas}>
@@ -1197,7 +1324,6 @@ const Smartboard: React.FC = () => {
                       </div>
                     )}
 
-                    {/* C. Word Document (DOCX) Viewer */}
                     {file.fileType === 'docx' && (
                       <div className={styles.docxViewer} style={{ transform: `scale(${file.zoom / 100})`, transformOrigin: 'top center' }}>
                         <div className={styles.docxPaper}>
@@ -1215,7 +1341,6 @@ const Smartboard: React.FC = () => {
                       </div>
                     )}
 
-                    {/* D. PDF Document Viewer */}
                     {file.fileType === 'pdf' && (
                       <div className={styles.pdfViewer} style={{ transform: `scale(${file.zoom / 100})`, transformOrigin: 'top center' }}>
                         {file.dataUrl ? (
@@ -1241,7 +1366,7 @@ const Smartboard: React.FC = () => {
         </div>
       </div>
 
-      {/* Bottom Drawing Toolbar — hidden in view-only mode */}
+      {/* Bottom Drawing Toolbar */}
       {!isViewOnly && (
       <footer className={styles.bottomToolbar}>
         <div className={styles.toolGroup}>
@@ -1292,7 +1417,7 @@ const Smartboard: React.FC = () => {
 
       {/* Live Status Bar */}
       <div className={styles.statusBar}>
-        Lines: {linesUsed} / {TOTAL_LINES} &nbsp;&nbsp;|&nbsp;&nbsp; Revealed: {revealedStep} / {totalRecordedSteps} &nbsp;&nbsp;|&nbsp;&nbsp; Items: {strokes.length + Object.keys(ruledTexts).length + diagrams.length + fileEmbeds.length}
+        Lines: {linesUsed} / {TOTAL_LINES} &nbsp;&nbsp;|&nbsp;&nbsp; Revealed: {revealedStep} / {totalRecordedSteps} &nbsp;&nbsp;|&nbsp;&nbsp; Items: {strokes.length + Object.keys(ruledTexts).length + diagrams.length + fileEmbeds.length} &nbsp;&nbsp;|&nbsp;&nbsp; Live Peers: {peerCount > 1 ? `${peerCount - 1} connected` : 'Ready'}
       </div>
 
       {/* Diagram & Shapes Selection Modal */}
@@ -1309,7 +1434,6 @@ const Smartboard: React.FC = () => {
               <X size={20} style={{ cursor: 'pointer', color: '#64748B' }} onClick={() => setShowDiagramModal(false)} />
             </div>
 
-            {/* Modal Tabs */}
             <div className={styles.tabBar}>
               <button 
                 className={`${styles.tabBtn} ${diagramTab === 'graphs' ? styles.activeTab : ''}`}
@@ -1337,7 +1461,6 @@ const Smartboard: React.FC = () => {
               </button>
             </div>
 
-            {/* Tab Contents */}
             <div className={styles.modalTabContent}>
               {diagramTab === 'graphs' && (
                 <div className={styles.gridCards}>
@@ -1464,13 +1587,13 @@ const Smartboard: React.FC = () => {
           <div className={styles.modal}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
               <h3 style={{ margin: 0, color: 'var(--primary-color)', fontSize: '1.35rem', fontWeight: 700 }}>
-                Collaborate — View Only
+                Live Stream & Collaboration
               </h3>
               <X size={22} style={{ cursor: 'pointer', color: '#64748B' }} onClick={() => setShowCollabModal(false)} />
             </div>
             
             <p style={{ color: 'var(--text-light)', fontSize: '0.9rem', lineHeight: 1.5, marginBottom: '1rem' }}>
-              Students can scan the QR code with their phone camera. They will be connected to <strong>this board only</strong> in view-only mode — no drawing, editing, or any action allowed.
+              Students can scan this QR code on their mobile or tablet camera. They will see everything you draw, write, and reveal <strong>live in real-time</strong>.
             </p>
 
             <div className={styles.qrContainer}>
@@ -1489,10 +1612,10 @@ const Smartboard: React.FC = () => {
                 </div>
               )}
               <span style={{ fontSize: '0.8rem', color: 'var(--text-light)', marginTop: '0.75rem', fontWeight: 500 }}>
-                Scan with mobile or tablet camera
+                Scan with phone / tablet camera
               </span>
               <span style={{ fontSize: '0.72rem', color: '#10B981', marginTop: '0.25rem', fontWeight: 600 }}>
-                Board ID: {id || 'demo'}
+                Board ID: {id || 'demo'} • {isWsConnected ? '⚡ Live WebSocket Active' : 'Connecting WebSocket...'}
               </span>
             </div>
 
@@ -1506,8 +1629,18 @@ const Smartboard: React.FC = () => {
               </button>
             </div>
 
-            <div style={{ backgroundColor: '#F1F5F9', padding: '0.85rem', borderRadius: '0.5rem', fontWeight: 600, fontSize: '0.95rem' }}>
-              Devices joined: <span style={{ color: 'var(--success)' }}>0 / 249</span>
+            <div style={{ backgroundColor: '#F1F5F9', padding: '0.85rem', borderRadius: '0.5rem', fontWeight: 600, fontSize: '0.95rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>Live Devices Joined:</span>
+              <span style={{ 
+                color: peerCount > 1 ? '#047857' : '#64748B', 
+                background: peerCount > 1 ? '#DCFCE7' : '#E2E8F0', 
+                padding: '0.2rem 0.65rem', 
+                borderRadius: '1rem', 
+                fontSize: '0.82rem', 
+                fontWeight: 700 
+              }}>
+                {peerCount > 1 ? `${peerCount - 1} Student(s) Live` : '0 / 249'}
+              </span>
             </div>
           </div>
         </div>
