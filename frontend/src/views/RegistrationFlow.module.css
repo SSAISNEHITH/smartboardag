@@ -1,0 +1,254 @@
+.container {
+  display: flex;
+  min-height: 100vh;
+  background-color: var(--background-light);
+}
+
+.leftSidebar {
+  width: 25%;
+  background-color: var(--primary-color);
+  color: var(--white);
+  padding: 3rem 2rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.leftSidebar h2 {
+  font-size: 1.5rem;
+  margin-top: 2rem;
+  margin-bottom: 0.5rem;
+}
+
+.leftSidebar p {
+  color: #93C5FD;
+  margin-bottom: 3rem;
+}
+
+.progressContainer {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  position: relative;
+}
+
+/* Vertical line for dots */
+.progressContainer::before {
+  content: '';
+  position: absolute;
+  left: 11px; /* Center with the 24px dot (12px radius) */
+  top: 12px;
+  bottom: 12px;
+  width: 2px;
+  background-color: #3B82F6;
+  z-index: 1;
+}
+
+.progressStep {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  z-index: 2;
+  position: relative;
+}
+
+.dot {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background-color: #1E3A8A;
+  border: 2px solid #3B82F6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s;
+}
+
+.dot.active {
+  background-color: var(--white);
+  border-color: var(--white);
+}
+
+.dot.completed {
+  background-color: var(--success);
+  border-color: var(--success);
+}
+
+.stepText {
+  color: #93C5FD;
+  font-weight: 500;
+  transition: color 0.3s;
+}
+
+.stepText.active, .stepText.completed {
+  color: var(--white);
+}
+
+.rightContent {
+  width: 75%;
+  padding: 2rem 5%;
+  display: flex;
+  flex-direction: column;
+}
+
+.topBar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 3rem;
+}
+
+.formContainer {
+  max-width: 500px;
+  margin: 0 auto;
+  width: 100%;
+  background: var(--white);
+  padding: 2.5rem;
+  border-radius: 1rem;
+  box-shadow: var(--shadow-md);
+}
+
+.formContainer h3 {
+  font-size: 1.75rem;
+  color: var(--primary-color);
+  margin-bottom: 0.5rem;
+}
+
+.formContainer p.description {
+  color: var(--text-light);
+  margin-bottom: 2rem;
+}
+
+.otpGroup {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-end;
+}
+
+.otpGroup .input-group {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+.otpGroup button {
+  height: 46px; /* Matches input height */
+}
+
+.actions {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 2rem;
+}
+
+.planGrid {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.planCard {
+  border: 2px solid #E5E7EB;
+  border-radius: 0.75rem;
+  padding: 1.5rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  transition: all 0.2s;
+}
+
+.planCard:hover {
+  border-color: var(--accent-color);
+  background-color: rgba(56, 132, 213, 0.05);
+}
+
+.planCard.selected {
+  border-color: var(--primary-color);
+  background-color: rgba(10, 37, 64, 0.05);
+}
+
+.passwordInputWrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.passwordInputWrapper input {
+  width: 100%;
+  padding-right: 2.5rem; /* space for icon */
+}
+
+.eyeIcon {
+  position: absolute;
+  right: 1rem;
+  color: var(--text-light);
+  cursor: pointer;
+}
+
+.otpVerificationBox {
+  margin-top: 0.75rem;
+  padding: 1rem;
+  background: #f0f7ff;
+  border: 1.5px dashed #93c5fd;
+  border-radius: 0.75rem;
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+.otpPromptRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+  font-size: 0.85rem;
+  color: #1e3a8a;
+}
+
+.demoOtpBadge {
+  background: #dbeafe;
+  color: #1d4ed8;
+  padding: 0.25rem 0.6rem;
+  border-radius: 9999px;
+  font-weight: 600;
+  font-size: 0.8rem;
+  cursor: pointer;
+  border: 1px solid #bfdbfe;
+  transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.demoOtpBadge:hover {
+  background: #bfdbfe;
+  transform: scale(1.02);
+}
+
+.otpInputs {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.otpInputField {
+  letter-spacing: 0.3rem;
+  font-weight: 700;
+  font-size: 1.1rem;
+  text-align: center;
+  max-width: 170px;
+}
+
+.verifiedChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: #dcfce7;
+  color: #166534;
+  font-weight: 600;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.8rem;
+  border-radius: 0.5rem;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+

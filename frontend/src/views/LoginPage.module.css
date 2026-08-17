@@ -1,0 +1,57 @@
+.container {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--background-light);
+  padding: 2rem;
+}
+
+.topBar {
+  display: flex;
+  justify-content: flex-start;
+  margin-bottom: 2rem;
+}
+
+.loginBox {
+  max-width: 450px;
+  width: 100%;
+  margin: auto;
+  background: var(--white);
+  padding: 3rem;
+  border-radius: 1rem;
+  box-shadow: var(--shadow-lg);
+  text-align: center;
+}
+
+.logoWrapper {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 1rem;
+}
+
+.title {
+  font-size: 1.5rem;
+  color: var(--primary-color);
+  margin-bottom: 2.5rem;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  text-align: left;
+}
+
+.form input {
+  width: 100%;
+}
+
+.footer {
+  margin-top: 2rem;
+  color: var(--text-light);
+}
+
+.footer a {
+  font-weight: 600;
+  margin-left: 0.25rem;
+}

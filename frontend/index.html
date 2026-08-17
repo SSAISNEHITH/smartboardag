@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/logo.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Thrisual Smart Teach</title>
+  </head>
+  <body>
+    <div id="root">
+      <div style="min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #f8fafc; font-family: 'Segoe UI', Inter, -apple-system, sans-serif;">
+        <div style="background: #ffffff; padding: 1.5rem; border-radius: 1.5rem; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.08); display: flex; align-items: center; justify-content: center; animation: pulseLogo 1.5s ease-in-out infinite;">
+          <img src="/logo.png" alt="Smart Teach Logo" style="height: 80px; width: 80px; object-fit: contain;" />
+        </div>
+        <p style="margin-top: 1.25rem; color: #0A2540; font-weight: 600; font-size: 1.1rem; letter-spacing: 0.5px;">Loading Smart Teach...</p>
+        <style>
+          @keyframes pulseLogo {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.06); opacity: 0.85; }
+          }
+        </style>
+      </div>
+    </div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

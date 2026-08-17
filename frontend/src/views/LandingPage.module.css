@@ -1,0 +1,174 @@
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 5%;
+  background-color: var(--white);
+  box-shadow: var(--shadow-sm);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.logoContainer {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-weight: 700;
+  font-size: 1.25rem;
+  color: var(--primary-color);
+}
+
+.navButtons {
+  display: flex;
+  gap: 1rem;
+}
+
+.hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4rem 5%;
+  min-height: 80vh;
+}
+
+.heroText {
+  flex: 1;
+  padding-right: 2rem;
+}
+
+.heroText h1 {
+  font-size: 3.5rem;
+  line-height: 1.1;
+  margin-bottom: 1.5rem;
+  color: var(--text-dark);
+}
+
+.heroText h1 span {
+  color: var(--primary-color);
+}
+
+.heroText p {
+  font-size: 1.25rem;
+  color: var(--text-light);
+  margin-bottom: 2rem;
+  max-width: 500px;
+}
+
+.heroActions {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.heroImage {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.heroImage img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 1rem;
+  box-shadow: var(--shadow-xl);
+}
+
+.features {
+  background-color: #E2E8F0;
+  padding: 5rem 5%;
+  text-align: center;
+}
+
+.features h2 {
+  font-size: 2.5rem;
+  margin-bottom: 3rem;
+  color: var(--primary-color);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 2rem;
+}
+
+.card {
+  background: var(--white);
+  padding: 2rem;
+  border-radius: 1rem;
+  box-shadow: var(--shadow-md);
+  text-align: left;
+  transition: transform 0.3s ease;
+}
+
+.card:hover {
+  transform: translateY(-5px);
+}
+
+.card h3 {
+  font-size: 1.25rem;
+  margin-bottom: 1rem;
+  color: var(--text-dark);
+}
+
+.pricing {
+  padding: 5rem 5%;
+  text-align: center;
+  background-color: var(--white);
+}
+
+.pricing h2 {
+  font-size: 2.5rem;
+  margin-bottom: 3rem;
+  color: var(--primary-color);
+}
+
+.pricingGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 2rem;
+}
+
+.priceCard {
+  background: var(--background-light);
+  padding: 2.5rem 2rem;
+  border-radius: 1rem;
+  border: 1px solid #E5E7EB;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+}
+
+.priceCard h3 {
+  font-size: 1.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.priceCard .price {
+  font-size: 2.5rem;
+  font-weight: 700;
+  color: var(--primary-color);
+  margin-bottom: 1.5rem;
+}
+
+.priceCard ul {
+  list-style: none;
+  text-align: left;
+  margin-bottom: 2rem;
+  flex-grow: 1;
+}
+
+.priceCard ul li {
+  margin-bottom: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.footer {
+  background-color: var(--primary-color);
+  color: var(--white);
+  padding: 2rem 5%;
+  text-align: center;
+}
