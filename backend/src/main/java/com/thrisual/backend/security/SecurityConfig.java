@@ -51,13 +51,16 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
 
-        // Build allowed origins list — always include localhost + any Railway URL
+        // Build allowed origins list — always include localhost + Railway frontend URLs
         List<String> origins = new ArrayList<>(Arrays.asList(
             "http://localhost:3000",
             "http://127.0.0.1:3000",
             "http://localhost:5173",
-            "http://127.0.0.1:5173"
+            "http://127.0.0.1:5173",
+            "https://frontend-production-72f7.up.railway.app"
         ));
+        configuration.addAllowedOriginPattern("https://*.up.railway.app");
+        configuration.addAllowedOriginPattern("https://*.railway.app");
         // Add Railway frontend URL from env variable (may be comma-separated)
         if (frontendUrl != null && !frontendUrl.isBlank()) {
             for (String url : frontendUrl.split(",")) {
