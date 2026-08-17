@@ -1,0 +1,11 @@
+[phases.setup]
+nixPkgs = ["jdk17", "maven"]
+
+[phases.install]
+cmds = ["chmod +x ./mvnw || true"]
+
+[phases.build]
+cmds = ["chmod +x ./mvnw && sh ./mvnw clean package -DskipTests"]
+
+[start]
+cmd = "java -Dserver.port=$PORT -jar target/*.jar"

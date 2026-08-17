@@ -1,9 +1,9 @@
 [build]
 builder = "nixpacks"
-buildCommand = "chmod +x ./mvnw && ./mvnw clean package -DskipTests"
-
+buildCommand = "chmod +x ./mvnw && sh ./mvnw clean package -DskipTests"
 
 [deploy]
-startCommand = "java -jar target/*.jar"
+startCommand = "java -Dserver.port=$PORT -jar target/*.jar"
 healthcheckPath = "/api/public/health"
+healthcheckTimeout = 120
 restartPolicyType = "on_failure"
